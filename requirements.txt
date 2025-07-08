@@ -7,3 +7,5 @@ PyYAML
 xgboost
 matplotlib
 seaborn
+transformers
+torch
