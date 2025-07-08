@@ -1,3 +1,4 @@
+# get_embeddings.py
 import pandas as pd
 import numpy as np
 import re
@@ -11,25 +12,13 @@ from datetime import datetime
 from pathlib import Path
 
 # Config sınıfını ayrı bir dosyadan (config.py) import ediyoruz
-# Bu satırın, config.py dosyanızın konumuna göre ayarlanması gerekebilir.
-# Örneğin, eğer config.py aynı dizindeyse bu şekilde kullanabilirsiniz:
-from config import Config  # config.py dosyanızın adını ve sınıfın adını kontrol edin
-
-# Veya, eğer config.py farklı bir alt dizindeyse (örneğin 'utils' klasöründe):
-# from utils.config import Config
-
-# NLTK verilerini indirme (bir kez çalıştırmak yeterlidir)
-# import nltk
-# nltk.download('wordnet')
+from config import Config
 
 
-# --- Lemmatizer Sınıfı (Değişiklik Yok) ---
-
-
-# --- MBTIFeatureExtractor Sınıfı (Değişiklikler Burada) ---
+# --- MBTIFeatureExtractor Sınıfı ---
 class MBTIFeatureExtractor:
     def __init__(self, config_instance: Config):
-        self.config = config_instance  # Config objesi burada alınıyor
+        self.config = config_instance
         self.tfidf_vectorizer = None
         self.feature_names = []
 
@@ -197,23 +186,18 @@ class MBTIFeatureExtractor:
             "analytical_word_ratio": 0,
         }
 
-    def extract_features(
-        self, data: pd.DataFrame, remove_mbti_types: bool = False
-    ) -> Tuple[np.ndarray, List[str]]:
+    def extract_features(self, data: pd.DataFrame) -> Tuple[np.ndarray, List[str]]:
         """Ana feature extraction fonksiyonu"""
 
         print("Metinler temizleniyor...")
         tqdm.pandas(desc="Metinleri Temizleme")
         data["cleaned_posts"] = data["posts"].progress_apply(
-            lambda x: self.clean_text(x, remove_mbti_types)
+            lambda x: self.clean_text(x)
         )
 
         print("TF-IDF özellikler çıkarılıyor...")
-        # TF-IDF parametrelerini config'den al
         tfidf_params = self.config.get_embeddings_config()
-        ngram_range_config = tfidf_params.get(
-            "ngram_range", [1, 3]
-        )  # Varsayılan değerler
+        ngram_range_config = tfidf_params.get("ngram_range", [1, 3])
 
         self.tfidf_vectorizer = TfidfVectorizer(
             max_features=tfidf_params.get("max_features", 5000),
@@ -256,27 +240,23 @@ class MBTIFeatureExtractor:
         features: np.ndarray,
         labels: np.ndarray,
         feature_names: List[str],
-        data_type: str,  # data_type artık zorunlu
+        data_type: str = "mbti_features",  # Default to a single data_type
         version: Optional[str] = None,
     ):
         """Özellikleri kaydet"""
-        # Özellikler ve vektörleyici için mevcut versiyonu kaydet
         if version is None:
             version = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Config'den yolları al
         npz_filepath = self.config.get_processed_data_path(
             data_type, version, extension=".npz"
         )
         csv_filepath = self.config.get_processed_data_path(
             data_type, version, extension=".csv"
         )
-        # Vektörleyici için ayrı bir yol (genellikle aynı data_type ve versiyon ile ilişkilidir)
         vectorizer_filepath = self.config.get_processed_data_path(
             f"{data_type}_vectorizer", version, extension=".pkl"
         )
 
-        # Numpy array olarak kaydet
         np.savez(
             npz_filepath,
             features=features,
@@ -284,12 +264,10 @@ class MBTIFeatureExtractor:
             feature_names=np.array(feature_names),
         )
 
-        # CSV olarak da kaydet (daha okunabilir)
         feature_df = pd.DataFrame(features, columns=feature_names)
         feature_df["mbti_type"] = labels
         feature_df.to_csv(csv_filepath, index=False)
 
-        # TF-IDF vektörleyiciyi kaydet
         with open(vectorizer_filepath, "wb") as f:
             pickle.dump(self.tfidf_vectorizer, f)
 
@@ -298,11 +276,10 @@ class MBTIFeatureExtractor:
         print(f"Özellik boyutu: {features.shape}")
 
     def load_features(
-        self, data_type: str, version: Optional[str] = None
+        self, data_type: str = "mbti_features", version: Optional[str] = None
     ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
         """Kaydedilmiş özellikleri yükle"""
 
-        # Eğer spesifik bir versiyon verilmemişse en son kaydedileni bul
         if version is None:
             npz_filepath = self.config.get_latest_processed_data_path(
                 data_type, extension=".npz"
@@ -311,25 +288,16 @@ class MBTIFeatureExtractor:
                 raise FileNotFoundError(
                     f"'{data_type}' tipi için en son işlenmiş veri bulunamadı."
                 )
-            # DİKKAT: BURADAKİ DEĞİŞİKLİK
-            # Dosya adından tam versiyon bilgisini çıkar (örneğin: "mbti_features_20250708_131702" -> "20250708_131702")
-            # stem: "mbti_features_20250708_131702"
-            # split("_") -> ["mbti", "features", "20250708", "131702"]
-            # join ile son iki parçayı birleştiriyoruz
             parts = npz_filepath.stem.split("_")
-            # data_type'ın kendisi underscore içerebileceği için, version'ı son iki parçadan almak daha güvenli.
-            # Örneğin "mbti_features_without_types_20250708_131702" için son iki parça "20250708_131702" olacaktır.
             if len(parts) >= 2 and re.match(r"\d{8}_\d{6}", "_".join(parts[-2:])):
-                version = "_".join(parts[-2:])  # Son iki parçayı birleştir
+                version = "_".join(parts[-2:])
             else:
-                # Beklenenden farklı bir dosya adı formatıysa hata fırlat veya varsayılan atama yap
                 raise ValueError(f"Beklenmeyen dosya adı formatı: {npz_filepath.stem}")
         else:
             npz_filepath = self.config.get_processed_data_path(
                 data_type, version, extension=".npz"
             )
 
-        # Vektörleyici dosya yolunu belirle
         vectorizer_filepath = self.config.get_processed_data_path(
             f"{data_type}_vectorizer", version, extension=".pkl"
         )
@@ -355,26 +323,21 @@ class MBTIFeatureExtractor:
 
 
 # --- Veri İşleme Fonksiyonu ---
-def process_mbti_data(config_instance: Config, remove_mbti_types: bool = False):
+def process_mbti_data(config_instance: Config):  # Removed remove_mbti_types parameter
     """MBTI datasını işle ve özelliklerini çıkar"""
 
     print("Veri yükleniyor...")
-    # Ham veri yolunu config'den al
     file_path = config_instance.get_path("raw_data_file")
     data = pd.read_csv(file_path)
 
     extractor = MBTIFeatureExtractor(config_instance)
-    features, feature_names = extractor.extract_features(data, remove_mbti_types)
+    features, feature_names = extractor.extract_features(
+        data
+    )  # No remove_mbti_types here
     labels = data["type"].values
 
-    # remove_mbti_types'a göre data_type belirle
-    if remove_mbti_types:
-        data_type_suffix = "with_types"
-    else:
-        data_type_suffix = "without_types"
-    save_data_type = f"mbti_features_{data_type_suffix}"
+    save_data_type = "mbti_features"  # Always save as 'mbti_features'
 
-    # Özellikleri ve vektörleyiciyi kaydet
     extractor.save_features(features, labels, feature_names, data_type=save_data_type)
 
     return features, labels, feature_names
@@ -382,72 +345,25 @@ def process_mbti_data(config_instance: Config, remove_mbti_types: bool = False):
 
 # --- Kullanım Örneği ---
 if __name__ == "__main__":
-    # Eğer wordnet'i indirmediyseniz, aşağıdaki iki satırı yorumdan kaldırıp bir kez çalıştırın:
-    # import nltk
-    # nltk.download('wordnet')
+    current_config = Config()
 
-    # Config objesinin bir örneğini oluştur
-    # Bu, config.py dosyanızın içindeki Config sınıfını kullanacaktır.
-    current_config = Config()  # Varsayılan olarak 'config.yaml' dosyasını arar
+    print("\n" + "--- MBTI Verileri İşleniyor ---" + "\n")
+    features, labels, feature_names = process_mbti_data(current_config)
+    print("\nİşlem tamamlandı!")
+    print(f"Özellik matrisi boyutu: {features.shape}")
+    print(f"Benzersiz MBTI tipleri: {np.unique(labels)}")
 
-    # config.yaml dosyasında 'paths.raw_data_file' yolunun doğru olduğundan emin olun.
-    # Örn: paths: raw_data_file: data/mbti_1.csv
-    print(f"Ham veri yolu (config'den): {current_config.get_path('raw_data_file')}")
-    print(
-        f"TF-IDF Max Features (config'den): {current_config.get_embeddings_config().get('max_features')}"
-    )
-
-    print("\n" + "--- MBTI Tiplerini KALDIRMADAN verileri işleme ---" + "\n")
-    features_no_mbti, labels_no_mbti, feature_names_no_mbti = process_mbti_data(
-        current_config, remove_mbti_types=False
-    )
-    print("\nİşlem tamamlandı (MBTI tipleri çıkarılmadı)!")
-    print(f"Özellik matrisi boyutu: {features_no_mbti.shape}")
-    print(f"Benzersiz MBTI tipleri: {np.unique(labels_no_mbti)}")
-
-    print("\n" + "=" * 80 + "\n")  # Ayrım için
-
-    print("\n" + "--- MBTI Tiplerini KALDIRARAK verileri işleme ---" + "\n")
-    features_with_mbti, labels_with_mbti, feature_names_with_mbti = process_mbti_data(
-        current_config, remove_mbti_types=True
-    )
-    print(
-        "\nİşlem tamamlandı (MBTI tipleri çıkarıldı)! (Bu durumda `remove_mbti_types=True` ise, metinden MBTI tipleri kaldırılır ancak dosya adına `with_types` eklenir, bu bir tutarsızlık olabilir. Eğer `remove_mbti_types=True` iken `without_types` olarak kaydedilmesini istiyorsanız, `data_type_suffix` mantığını tersine çevirmeniz gerekir.)"
-    )
-    print(f"Özellik matrisi boyutu: {features_with_mbti.shape}")
-    print(f"Benzersiz MBTI tipleri: {np.unique(labels_with_mbti)}")
-
-    # İşlenmiş özellikleri yükleme örneği
     print("\n" + "--- Kaydedilmiş Özellikleri Yükleme ---" + "\n")
     try:
-        # En son kaydedilen "mbti_features_without_types" türündeki özellikleri yükler
-        print("\n'without_types' özelliklerini yüklemeye çalışılıyor...")
-        loaded_features_no_mbti, loaded_labels_no_mbti, loaded_feature_names_no_mbti = (
-            MBTIFeatureExtractor(current_config).load_features(
-                data_type="mbti_features_without_types"
-            )
+        print("\n'mbti_features' özelliklerini yüklemeye çalışılıyor...")
+        loaded_features, loaded_labels, loaded_feature_names = MBTIFeatureExtractor(
+            current_config
+        ).load_features(data_type="mbti_features")
+        print(
+            f"Yüklenen 'mbti_features' özellik matrisi boyutu: {loaded_features.shape}"
         )
         print(
-            f"Yüklenen 'without_types' özellik matrisi boyutu: {loaded_features_no_mbti.shape}"
-        )
-        print(
-            f"Yüklenen 'without_types' benzersiz MBTI tipleri: {np.unique(loaded_labels_no_mbti)}"
-        )
-
-        # En son kaydedilen "mbti_features_with_types" türündeki özellikleri yükler
-        print("\n'with_types' özelliklerini yüklemeye çalışılıyor...")
-        (
-            loaded_features_with_mbti,
-            loaded_labels_with_mbti,
-            loaded_feature_names_with_mbti,
-        ) = MBTIFeatureExtractor(current_config).load_features(
-            data_type="mbti_features_with_types"
-        )
-        print(
-            f"Yüklenen 'with_types' özellik matrisi boyutu: {loaded_features_with_mbti.shape}"
-        )
-        print(
-            f"Yüklenen 'with_types' benzersiz MBTI tipleri: {np.unique(loaded_labels_with_mbti)}"
+            f"Yüklenen 'mbti_features' benzersiz MBTI tipleri: {np.unique(loaded_labels)}"
         )
 
     except FileNotFoundError as e:

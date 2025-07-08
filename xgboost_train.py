@@ -1,3 +1,4 @@
+# xgboost_train.py
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import (
@@ -17,10 +18,9 @@ from scipy.stats import uniform, randint
 import os
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple, List
-from tqdm.auto import tqdm  # tqdm import edildi
+from tqdm.auto import tqdm
 from pathlib import Path
 
-# Config sınıfını import et
 from config import Config
 
 warnings.filterwarnings("ignore")
@@ -29,22 +29,20 @@ warnings.filterwarnings("ignore")
 # GPU kullanılabilirliğini kontrol et
 def check_gpu_availability():
     try:
-        # Adjusted for multi-class and to provide a base_score > 0
         temp_model = XGBClassifier(
             tree_method="hist",
             predictor="gpu_predictor",
             n_estimators=1,
             enable_categorical=False,
-            objective="multi:softmax",  # Use multi-softmax for a more robust check
-            num_class=2,  # Need at least 2 classes for multi-softmax
-            base_score=0.5,  # Set a valid base_score for testing
+            objective="multi:softmax",
+            num_class=2,
+            base_score=0.5,
         )
-        # Use simple dummy data for fitting
         temp_model.fit(
             np.array([[0.0, 1.0]], dtype=np.float32),
             np.array([0]),
             eval_set=[(np.array([[0.0, 1.0]], dtype=np.float32), np.array([0]))],
-            verbose=False,  # Suppress verbose output for the check
+            verbose=False,
         )
         print("XGBoost GPU (CUDA) desteği kullanılabilir.")
         return True
@@ -75,7 +73,7 @@ class MBTIXGBoostAnalyzer:
 
     def load_data(
         self,
-        data_type: str = "mbti_features_without_types",
+        data_type: str = "mbti_features",  # Default to the single feature type
         version: Optional[str] = None,
     ):
         """NPZ dosyasından veriyi yükle"""
@@ -86,7 +84,7 @@ class MBTIXGBoostAnalyzer:
         )
         if filepath is None:
             raise FileNotFoundError(
-                f"En son '{data_type}' özellik dosyası bulunamadı. Lütfen önce `get_embeddings.py`'yi çalıştırın ve `remove_mbti_types` parametresini doğru ayarladığınızdan emin olun."
+                f"En son '{data_type}' özellik dosyası bulunamadı. Lütfen önce `get_embeddings.py`'yi çalıştırın."
             )
 
         data = np.load(filepath, allow_pickle=True)
@@ -160,7 +158,6 @@ class MBTIXGBoostAnalyzer:
 
     def _get_base_xgb_model(self) -> XGBClassifier:
         """Base XGBoost modelini döndür (GPU/CPU ayarlı)"""
-        # Get default parameters from config if fine_tune is False
         default_params = self.config.get_model_config("xgboost_multiclass").get(
             "params", {}
         )
@@ -212,13 +209,11 @@ class MBTIXGBoostAnalyzer:
             n_iter=n_iter,
             cv=cv_folds,
             scoring="f1_weighted",
-            n_jobs=1 if self.use_gpu else -1,  # Set n_jobs based on GPU
-            verbose=1,  # Keep verbose for RandomizedSearchCV's own progress
+            n_jobs=1 if self.use_gpu else -1,
+            verbose=1,
             random_state=42,
         )
 
-        # Note: eval_set and early_stopping_rounds are not passed to RandomizedSearchCV's fit.
-        # RandomizedSearchCV internally handles cross-validation.
         random_search.fit(X_train, y_train_encoded)
 
         print(f"16 MBTI tipi en iyi parametreler: {random_search.best_params_}")
@@ -275,7 +270,6 @@ class MBTIXGBoostAnalyzer:
 
     def predict_mbti(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """MBTI tiplerini tahmin et"""
-        # Ensure scaler exists before transforming
         X_scaled = self.scaler.transform(X) if self.scaler else X
         X_scaled = X_scaled.astype(np.float32)
 
@@ -375,8 +369,6 @@ class MBTIXGBoostAnalyzer:
 
     def save_model(self, model_prefix: str = "mbti_xgboost_multiclass_model"):
         """Modeli kaydet"""
-        # We need a way to differentiate models saved from different feature sets
-        # So we'll pass the model_prefix directly, which will include "without_types" or "with_types"
         model_filepath = self.config.get_model_path(model_prefix)
 
         model_data = {
@@ -421,19 +413,17 @@ class MBTIXGBoostAnalyzer:
 
 # --- Ana Pipeline ---
 def run_mbti_analysis(
-    config_instance: Config, data_type: str, fine_tune_model: bool = True
+    config_instance: Config,
+    data_type: str = "mbti_features",
+    fine_tune_model: bool = True,
 ):
     """Belirtilen data_type ile MBTI analiz pipeline'ını çalıştırır."""
     print(f"\n{'='*80}")
-    print(
-        f"--- MBTI Tipleri {'KALDIRILARAK' if 'with_types' in data_type else 'KALDIRILMADAN'} Veriyle Model Eğitimi ---"
-    )
-    print(f"Yüklenen Veri Tipi: {data_type}")
+    print(f"--- MBTI Model Eğitimi ({data_type}) ---")
     print(f"{'='*80}\n")
 
     analyzer = MBTIXGBoostAnalyzer(config_instance)
 
-    # Load data based on the specified data_type
     features, labels, feature_names = analyzer.load_data(data_type=data_type)
     analyzer.feature_names = feature_names
 
@@ -497,9 +487,7 @@ def run_mbti_analysis(
 
     print(f"\n=== ÖRNEK PREDİCTİON ({data_type}) ===")
     sample_indices = np.random.choice(len(X_test_scaled), 5, replace=False)
-    sample_features = X_test_scaled[
-        sample_indices
-    ]  # Use scaled features for prediction
+    sample_features = X_test_scaled[sample_indices]
     sample_true_encoded = y_test_encoded[sample_indices]
     sample_true_original = analyzer.label_encoder.inverse_transform(sample_true_encoded)
 
@@ -518,44 +506,24 @@ def run_mbti_analysis(
 if __name__ == "__main__":
     current_config = Config()
 
-    # Make sure you have run the get_embeddings.py script first to generate these features
-    # (once with remove_mbti_types=False and once with remove_mbti_types=True)
-
-    # --- Run with features WITHOUT MBTI types removed from text ---
-    run_mbti_analysis(
-        current_config, data_type="mbti_features_without_types", fine_tune_model=False
-    )
-
-    # --- Run with features WITH MBTI types removed from text ---
-    run_mbti_analysis(
-        current_config, data_type="mbti_features_with_types", fine_tune_model=False
-    )
+    # We now process and use a single type of feature file: 'mbti_features'
+    run_mbti_analysis(current_config, data_type="mbti_features", fine_tune_model=False)
 
     print("\n" + "=" * 80)
     print("Tüm XGBoost eğitim ve değerlendirme işlemleri tamamlandı.")
     print("=" * 80 + "\n")
 
-    # --- Example: Loading and checking a specific model ---
+    # --- Example: Loading and checking the model ---
     print("\n--- Kaydedilen Modeli Yükleme Örneği ---")
     try:
-        print("\n'without_types' modeli yükleniyor...")
-        loaded_analyzer_without = MBTIXGBoostAnalyzer(current_config)
-        loaded_analyzer_without.load_model(
-            model_prefix="mbti_xgboost_multiclass_model_mbti_features_without_types"
+        print("\n'mbti_features' modeli yükleniyor...")
+        loaded_analyzer = MBTIXGBoostAnalyzer(current_config)
+        loaded_analyzer.load_model(
+            model_prefix="mbti_xgboost_multiclass_model_mbti_features"
         )
-        print("Model (without_types) başarıyla yüklendi.")
+        print("Model (mbti_features) başarıyla yüklendi.")
         print(
-            f"Yüklenen modelin eğitiminde kullanılan özellik sayısı: {len(loaded_analyzer_without.feature_names)}"
-        )
-
-        print("\n'with_types' modeli yükleniyor...")
-        loaded_analyzer_with = MBTIXGBoostAnalyzer(current_config)
-        loaded_analyzer_with.load_model(
-            model_prefix="mbti_xgboost_multiclass_model_mbti_features_with_types"
-        )
-        print("Model (with_types) başarıyla yüklendi.")
-        print(
-            f"Yüklenen modelin eğitiminde kullanılan özellik sayısı: {len(loaded_analyzer_with.feature_names)}"
+            f"Yüklenen modelin eğitiminde kullanılan özellik sayısı: {len(loaded_analyzer.feature_names)}"
         )
 
     except FileNotFoundError as e:
