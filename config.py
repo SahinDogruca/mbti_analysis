@@ -35,7 +35,7 @@ class Config:
                 "data_dir": "data",
                 "cached_data_dir": "cached/data",
                 "cached_model_dir": "cached/model",
-                "cached_plots_dir": "cached/plots",  # Yeni eklendi
+                "cached_plots_dir": "cached/plots",
                 "raw_data_file": "data/mbti_1.csv",
             },
             "models": {
@@ -48,6 +48,7 @@ class Config:
                         "learning_rate": 0.1,
                         "random_state": 42,
                     },
+                    "tfidf_vectorizer_file": "tfidf_vectorizer.pkl",  # Varsayılan olarak eklendi
                 },
             },
             "embeddings": {
@@ -97,7 +98,7 @@ class Config:
         dirs_to_create = [
             self.get_path("cached_data_dir"),
             self.get_path("cached_model_dir"),
-            self.get_path("cached_plots_dir"),  # Yeni eklendi
+            self.get_path("cached_plots_dir"),
             self.get_path("data_dir"),
             self.base_dir / "logs",
         ]
@@ -122,7 +123,13 @@ class Config:
         prefix = model_config.get("file_prefix", model_name)
 
         if version is None:
-            version = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # If no version is specified, try to find the latest
+            latest_path = self.get_latest_model_path(model_name)
+            if latest_path:
+                return latest_path
+            version = datetime.now().strftime(
+                "%Y%m%d_%H%M%S"
+            )  # Fallback to new timestamp
 
         filename = f"{prefix}_{version}.pkl"
         return self.get_path("cached_model_dir") / filename
@@ -132,7 +139,13 @@ class Config:
     ) -> Path:
         """İşlenmiş veri dosya yolunu oluştur"""
         if version is None:
-            version = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # If no version is specified, try to find the latest
+            latest_path = self.get_latest_processed_data_path(data_type, extension)
+            if latest_path:
+                return latest_path
+            version = datetime.now().strftime(
+                "%Y%m%d_%H%M%S"
+            )  # Fallback to new timestamp
 
         filename = f"{data_type}_{version}{extension}"
         return self.get_path("cached_data_dir") / filename
@@ -196,6 +209,22 @@ class Config:
 
         return max(matching_files, key=lambda x: x.stat().st_mtime)
 
+    def get_latest_tfidf_vectorizer_path(
+        self, model_name: str = "xgboost_multiclass"
+    ) -> Optional[Path]:
+        """En son kaydedilen TF-IDF vektörleştirici dosyasını bul"""
+        model_config = self.get_model_config(model_name)
+        tfidf_filename = model_config.get("tfidf_vectorizer_file")
+        if not tfidf_filename:
+            return None
+
+        model_dir = self.get_path("cached_model_dir")
+        # Assuming TF-IDF vectorizer is saved directly with its filename
+        tfidf_path = model_dir / tfidf_filename
+        if tfidf_path.exists():
+            return tfidf_path
+        return None
+
 
 config = Config()
 
@@ -232,6 +261,13 @@ def get_plot_save_path(
     return config.get_plots_path(plot_name, version, extension)
 
 
+def get_tfidf_vectorizer_load_path(
+    model_name: str = "xgboost_multiclass",
+) -> Optional[Path]:
+    """TF-IDF vektörleştirici yükleme yolunu al"""
+    return config.get_latest_tfidf_vectorizer_path(model_name)
+
+
 if __name__ == "__main__":
     print("Config sistemi test ediliyor...")
     print(f"Modeller: {config.list_available_models()}")
@@ -239,6 +275,5 @@ if __name__ == "__main__":
     print(f"Model kaydetme yolu: {get_model_save_path('xgboost_multiclass')}")
     print(f"Veri kaydetme yolu: {get_data_save_path('mbti_features')}")
     print(f"Ham veri yolu: {get_raw_data_path()}")
-    print(
-        f"Görsel kaydetme yolu: {get_plot_save_path('confusion_matrix')}"
-    )  # Yeni test
+    print(f"Görsel kaydetme yolu: {get_plot_save_path('confusion_matrix')}")
+    print(f"TF-IDF vektörleştirici yolu: {get_tfidf_vectorizer_load_path()}")

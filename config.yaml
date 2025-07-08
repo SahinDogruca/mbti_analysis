@@ -1,9 +1,8 @@
-# config.yaml
 paths:
   data_dir: "data"
   cached_data_dir: "cached/data"
   cached_model_dir: "cached/model"
-  cached_plots_dir: "results/plots"
+  cached_plots_dir: "results/plots" # Updated path
   raw_data_file: "data/mbti_1.csv"
 
 models:
@@ -17,6 +16,7 @@ models:
       colsample_bytree: 0.8166031869068445
       subsample: 0.8070259980080767
       random_state: 42
+    tfidf_vectorizer_file: "tfidf_vectorizer.pkl" # Added this line
 
 embeddings:
   method: "tfidf"

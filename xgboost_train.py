@@ -1,4 +1,3 @@
-# xgboost_train.py
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import (
@@ -20,8 +19,10 @@ from datetime import datetime
 from typing import Optional, Dict, Any, Tuple, List
 from tqdm.auto import tqdm
 from pathlib import Path
+from sklearn.feature_extraction.text import TfidfVectorizer  # Import TfidfVectorizer
 
-from config import Config
+from config import Config, get_config  # Import get_config to instantiate Config
+
 
 warnings.filterwarnings("ignore")
 
@@ -63,6 +64,9 @@ class MBTIXGBoostAnalyzer:
         self.label_encoder = LabelEncoder()
         self.feature_names: List[str] = []
         self.mbti_types: List[str] = []
+        self.tfidf_vectorizer: Optional[TfidfVectorizer] = (
+            None  # Added TF-IDF Vectorizer attribute
+        )
 
         self.use_gpu = USE_GPU
 
@@ -79,18 +83,25 @@ class MBTIXGBoostAnalyzer:
         """NPZ dosyasından veriyi yükle"""
         print(f"Veri yükleniyor: {data_type}...")
 
+        # Use get_latest_processed_data_path from config
         filepath = self.config.get_latest_processed_data_path(
             data_type, extension=".npz"
         )
         if filepath is None:
             raise FileNotFoundError(
-                f"En son '{data_type}' özellik dosyası bulunamadı. Lütfen önce `get_embeddings.py`'yi çalıştırın."
+                f"En son '{data_type}' özellik dosyası bulunamadı. Lütfen önce veri işleme adımlarını çalıştırın."
             )
 
         data = np.load(filepath, allow_pickle=True)
         features = data["features"]
         labels = data["labels"]
-        feature_names = data["feature_names"].tolist()
+        # Ensure feature_names is handled correctly; it should be a list for consistency
+        feature_names = (
+            data["feature_names"].tolist() if "feature_names" in data else []
+        )
+        self.tfidf_vectorizer = (
+            data["tfidf_vectorizer"].item() if "tfidf_vectorizer" in data else None
+        )  # Load TF-IDF
 
         features = features.astype(np.float32)
 
@@ -158,6 +169,7 @@ class MBTIXGBoostAnalyzer:
 
     def _get_base_xgb_model(self) -> XGBClassifier:
         """Base XGBoost modelini döndür (GPU/CPU ayarlı)"""
+        # Get parameters from config.yaml
         default_params = self.config.get_model_config("xgboost_multiclass").get(
             "params", {}
         )
@@ -170,8 +182,12 @@ class MBTIXGBoostAnalyzer:
             "n_estimators": default_params.get("n_estimators", 100),
             "max_depth": default_params.get("max_depth", 6),
             "learning_rate": default_params.get("learning_rate", 0.1),
-            "colsample_bytree": default_params.get("colsample_bytree", 0.3),
-            "subsample": default_params.get("subsample", 0.3),
+            "colsample_bytree": default_params.get(
+                "colsample_bytree", 0.7
+            ),  # Default adjusted to reflect config.yaml
+            "subsample": default_params.get(
+                "subsample", 0.7
+            ),  # Default adjusted to reflect config.yaml
         }
         if self.use_gpu:
             return XGBClassifier(
@@ -190,6 +206,7 @@ class MBTIXGBoostAnalyzer:
         """XGBoost için RandomizedSearchCV"""
         print(f"\n16 MBTI tipi için RandomizedSearchCV başlatılıyor...")
 
+        # Get tuning parameters from config
         n_iter = self.config.get_data_processing_config().get("tuning_n_iter", 30)
         cv_folds = self.config.get_data_processing_config().get("tuning_cv_folds", 3)
 
@@ -209,7 +226,7 @@ class MBTIXGBoostAnalyzer:
             n_iter=n_iter,
             cv=cv_folds,
             scoring="f1_weighted",
-            n_jobs=1 if self.use_gpu else -1,
+            n_jobs=1 if self.use_gpu else -1,  # Set n_jobs based on GPU usage
             verbose=1,
             random_state=42,
         )
@@ -254,11 +271,13 @@ class MBTIXGBoostAnalyzer:
             self.model = self._get_base_xgb_model()
 
             print("Model eğitiliyor (XGBoost verbose çıktısı ile):")
+            # Using eval_set for early stopping if needed, though not explicitly configured here
             self.model.fit(
                 X_train_scaled,
                 y_train_encoded,
                 eval_set=[(X_val_scaled, y_val_encoded)],
                 verbose=True,
+                # early_stopping_rounds=self.config.get_data_processing_config().get("early_stopping_rounds", None) # Add this if you want early stopping
             )
 
         val_pred_encoded = self.model.predict(X_val_scaled)
@@ -270,7 +289,9 @@ class MBTIXGBoostAnalyzer:
 
     def predict_mbti(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """MBTI tiplerini tahmin et"""
-        X_scaled = self.scaler.transform(X) if self.scaler else X
+        if self.scaler is None:
+            raise ValueError("Scaler is not fitted. Please train the model first.")
+        X_scaled = self.scaler.transform(X)
         X_scaled = X_scaled.astype(np.float32)
 
         predicted_encoded = self.model.predict(X_scaled)
@@ -290,7 +311,13 @@ class MBTIXGBoostAnalyzer:
         """Model performansını değerlendir"""
         print(f"\n=== {dataset_name.upper()} SETİ DEĞERLENDİRMESİ ===")
 
-        predicted_mbti, confidences = self.predict_mbti(X_test)
+        # Ensure X_test is scaled before prediction
+        X_test_scaled = self.scaler.transform(X_test) if self.scaler else X_test
+        X_test_scaled = X_test_scaled.astype(np.float32)
+
+        predicted_mbti, confidences = self.predict_mbti(
+            X_test_scaled
+        )  # Pass scaled X_test
 
         y_test_original = self.label_encoder.inverse_transform(y_test_encoded)
 
@@ -343,7 +370,7 @@ class MBTIXGBoostAnalyzer:
         if save_path:
             plt.savefig(save_path)
             print(f"Confusion Matrix kaydedildi: {save_path}")
-        plt.show()
+        # plt.show() # Commented out to prevent showing plot during automated runs
 
     def get_feature_importance(self, top_n: int = 20):
         """Feature importance analizi"""
@@ -358,18 +385,52 @@ class MBTIXGBoostAnalyzer:
 
         importance = self.model.feature_importances_
 
+        # Ensure importance array matches feature_names length
+        if len(importance) != len(self.feature_names):
+            print(
+                f"Uyarı: Feature importance boyutu ({len(importance)}) feature_names boyutu ({len(self.feature_names)}) ile uyuşmuyor."
+            )
+            return
+
         top_indices = np.argsort(importance)[-top_n:][::-1]
 
         print(f"\n--- Top {top_n} Features (Overall MBTI) ---")
         for i, idx in enumerate(top_indices):
-            if idx < len(self.feature_names):
-                print(f"{i+1:2d}. {self.feature_names[idx]:<50} {importance[idx]:.4f}")
-            else:
-                print(f"{i+1:2d}. Unknown Feature (Index: {idx}) {importance[idx]:.4f}")
+            print(f"{i+1:2d}. {self.feature_names[idx]:<50} {importance[idx]:.4f}")
 
-    def save_model(self, model_prefix: str = "mbti_xgboost_multiclass_model"):
-        """Modeli kaydet"""
-        model_filepath = self.config.get_model_path(model_prefix)
+    def save_model(self, model_prefix: str):
+        """Modeli ve ilişkili nesneleri (scaler, label_encoder, feature_names, tfidf_vectorizer) kaydet"""
+        # Ensure the prefix is valid for config lookup
+        if (
+            model_prefix not in self.config.list_available_models()
+            and not model_prefix.startswith("mbti_xgboost_multiclass_model_")
+        ):
+            # If it's a dynamic prefix from run_mbti_analysis, use the base model prefix for pathing
+            base_model_prefix = "xgboost_multiclass"
+        else:
+            base_model_prefix = model_prefix
+
+        model_filepath = self.config.get_model_path(base_model_prefix)
+
+        # Save TF-IDF Vectorizer separately if it exists and a specific file is defined
+        if self.tfidf_vectorizer:
+            tfidf_filename = self.config.get_model_config(base_model_prefix).get(
+                "tfidf_vectorizer_file"
+            )
+            if tfidf_filename:
+                tfidf_filepath = (
+                    self.config.get_path("cached_model_dir") / tfidf_filename
+                )
+                try:
+                    with open(tfidf_filepath, "wb") as f:
+                        joblib.dump(
+                            self.tfidf_vectorizer, f
+                        )  # Use joblib for consistency
+                    print(f"TF-IDF vektörleştirici kaydedildi: {tfidf_filepath}")
+                except Exception as e:
+                    print(
+                        f"Hata: TF-IDF vektörleştirici kaydedilemedi {tfidf_filepath}. Hata: {e}"
+                    )
 
         model_data = {
             "model": self.model,
@@ -378,6 +439,9 @@ class MBTIXGBoostAnalyzer:
             "feature_names": self.feature_names,
             "mbti_types": self.mbti_types,
             "use_gpu": self.use_gpu,
+            # TF-IDF vectorizer is now saved separately, but we can also include it here
+            # for a single dump, if preferred. For prediction script, separate is cleaner.
+            # "tfidf_vectorizer": self.tfidf_vectorizer
         }
 
         joblib.dump(model_data, model_filepath)
@@ -385,10 +449,10 @@ class MBTIXGBoostAnalyzer:
 
     def load_model(
         self,
-        model_prefix: str = "mbti_xgboost_multiclass_model",
+        model_prefix: str,
         version: Optional[str] = None,
     ):
-        """Modeli yükle"""
+        """Modeli ve ilişkili nesneleri yükle"""
         if version is None:
             model_filepath = self.config.get_latest_model_path(model_prefix)
             if model_filepath is None:
@@ -406,7 +470,30 @@ class MBTIXGBoostAnalyzer:
         self.label_encoder = model_data["label_encoder"]
         self.feature_names = model_data["feature_names"]
         self.mbti_types = model_data["mbti_types"]
-        self.use_gpu = model_data.get("use_gpu", False)
+        self.use_gpu = model_data.get("use_gpu", False)  # Safely get 'use_gpu'
+
+        # Load TF-IDF vectorizer separately as per the saving strategy
+        tfidf_filename = self.config.get_model_config(model_prefix).get(
+            "tfidf_vectorizer_file"
+        )
+        if tfidf_filename:
+            tfidf_filepath = self.config.get_path("cached_model_dir") / tfidf_filename
+            if tfidf_filepath.exists():
+                try:
+                    self.tfidf_vectorizer = joblib.load(tfidf_filepath)
+                    print(f"TF-IDF vektörleştirici yüklendi: {tfidf_filepath}")
+                except Exception as e:
+                    print(
+                        f"Hata: TF-IDF vektörleştirici yüklenemedi {tfidf_filepath}. Hata: {e}"
+                    )
+            else:
+                print(
+                    f"Uyarı: TF-IDF vektörleştirici dosyası bulunamadı: {tfidf_filepath}"
+                )
+        else:
+            print(
+                "Uyarı: config.yaml'da TF-IDF vektörleştirici dosya adı belirtilmemiş."
+            )
 
         print(f"Model yüklendi: {model_filepath}")
 
@@ -425,7 +512,30 @@ def run_mbti_analysis(
     analyzer = MBTIXGBoostAnalyzer(config_instance)
 
     features, labels, feature_names = analyzer.load_data(data_type=data_type)
-    analyzer.feature_names = feature_names
+    analyzer.feature_names = feature_names  # Set feature names for the analyzer
+
+    # Assign the loaded TF-IDF vectorizer to the analyzer for saving later
+    # This assumes that the TF-IDF vectorizer is part of the 'mbti_features' NPZ file
+    # If not, you'll need a separate step to load/create it before training.
+    # For now, we assume it's loaded with the features.
+    # If your get_embeddings.py saves the TF-IDF separately, you'd load it here.
+    # For this current setup, it's expected to be saved within the 'mbti_features' NPZ.
+    # If not, ensure you adjust 'load_data' to retrieve it or load it via 'get_config().get_latest_tfidf_vectorizer_path()'
+    if analyzer.tfidf_vectorizer is None:
+        print(
+            "Uyarı: TF-IDF vektörleştirici veri yüklenirken bulunamadı. Lütfen embeddings oluşturma adımlarını kontrol edin."
+        )
+        # Attempt to load it if it's meant to be saved separately during embeddings creation
+        # (This is a fallback, ideally it comes with the features)
+        tfidf_load_path = config_instance.get_latest_tfidf_vectorizer_path(
+            "xgboost_multiclass"
+        )
+        if tfidf_load_path and tfidf_load_path.exists():
+            try:
+                analyzer.tfidf_vectorizer = joblib.load(tfidf_load_path)
+                print(f"TF-IDF vektörleştirici ayrı olarak yüklendi: {tfidf_load_path}")
+            except Exception as e:
+                print(f"Hata: Ayrı TF-IDF vektörleştirici yüklenemedi: {e}")
 
     X_train, X_val, X_test, y_train_encoded, y_val_encoded, y_test_encoded = (
         analyzer.split_data(
@@ -456,7 +566,9 @@ def run_mbti_analysis(
     # Evaluation on Validation Set
     print("\n--- Validation Set Performance ---")
     val_pred, val_conf, val_results = analyzer.evaluate_model(
-        X_val_scaled, y_val_encoded, "Validation"
+        X_val,
+        y_val_encoded,
+        "Validation",  # Pass unscaled X_val, predict_mbti handles scaling
     )
     # Save Confusion Matrix plot for Validation Set
     analyzer.plot_confusion_matrix(
@@ -469,7 +581,9 @@ def run_mbti_analysis(
     # Evaluation on Test Set
     print("\n--- Test Set Performance ---")
     test_pred, test_conf, test_results = analyzer.evaluate_model(
-        X_test_scaled, y_test_encoded, "Test"
+        X_test,
+        y_test_encoded,
+        "Test",  # Pass unscaled X_test, predict_mbti handles scaling
     )
     # Save Confusion Matrix plot for Test Set
     analyzer.plot_confusion_matrix(
@@ -482,12 +596,16 @@ def run_mbti_analysis(
     analyzer.get_feature_importance(top_n=20)
 
     # Save model with a unique prefix based on data_type
-    model_save_prefix = f"mbti_xgboost_multiclass_model_{data_type}"
-    analyzer.save_model(model_prefix=model_save_prefix)
+    # The config's get_model_path will use "xgboost_multiclass" as the base for file prefixing
+    analyzer.save_model(
+        model_prefix="xgboost_multiclass"
+    )  # Use the base model name defined in config.yaml
 
     print(f"\n=== ÖRNEK PREDİCTİON ({data_type}) ===")
-    sample_indices = np.random.choice(len(X_test_scaled), 5, replace=False)
-    sample_features = X_test_scaled[sample_indices]
+    sample_indices = np.random.choice(
+        len(X_test), 5, replace=False
+    )  # Use unscaled X_test
+    sample_features = X_test[sample_indices]
     sample_true_encoded = y_test_encoded[sample_indices]
     sample_true_original = analyzer.label_encoder.inverse_transform(sample_true_encoded)
 
@@ -504,9 +622,10 @@ def run_mbti_analysis(
 
 
 if __name__ == "__main__":
-    current_config = Config()
+    current_config = get_config()  # Get the singleton Config instance
 
     # We now process and use a single type of feature file: 'mbti_features'
+    # Set fine_tune_model to True to enable RandomizedSearchCV, or False to use default params
     run_mbti_analysis(current_config, data_type="mbti_features", fine_tune_model=False)
 
     print("\n" + "=" * 80)
@@ -516,15 +635,20 @@ if __name__ == "__main__":
     # --- Example: Loading and checking the model ---
     print("\n--- Kaydedilen Modeli Yükleme Örneği ---")
     try:
-        print("\n'mbti_features' modeli yükleniyor...")
+        print("\n'xgboost_multiclass' modeli yükleniyor...")
         loaded_analyzer = MBTIXGBoostAnalyzer(current_config)
-        loaded_analyzer.load_model(
-            model_prefix="mbti_xgboost_multiclass_model_mbti_features"
-        )
-        print("Model (mbti_features) başarıyla yüklendi.")
+        # Use the base model prefix to load
+        loaded_analyzer.load_model(model_prefix="xgboost_multiclass")
+        print("Model (xgboost_multiclass) başarıyla yüklendi.")
         print(
             f"Yüklenen modelin eğitiminde kullanılan özellik sayısı: {len(loaded_analyzer.feature_names)}"
         )
+        if loaded_analyzer.tfidf_vectorizer:
+            print(
+                f"Yüklenen TF-IDF vektörleştirici vocabulary boyutu: {len(loaded_analyzer.tfidf_vectorizer.vocabulary_)}"
+            )
+        else:
+            print("Yüklenen modelle birlikte TF-IDF vektörleştirici bulunamadı.")
 
     except FileNotFoundError as e:
         print(f"Model yüklenirken hata oluştu: {e}")
