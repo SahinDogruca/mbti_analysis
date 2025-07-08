@@ -220,5 +220,6 @@ pip-selfcheck.json
 .ionide
 
 cached/
+data/
 
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode,venv,git

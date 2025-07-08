@@ -24,18 +24,6 @@ from config import Config  # config.py dosyanızın adını ve sınıfın adın�
 
 
 # --- Lemmatizer Sınıfı (Değişiklik Yok) ---
-class Lemmatizer(object):
-    def __init__(self):
-        self.lemmatizer = WordNetLemmatizer()
-
-    def __call__(self, sentence):
-        if not isinstance(sentence, str):
-            return []
-        return [
-            self.lemmatizer.lemmatize(word)
-            for word in sentence.split()
-            if len(word) > 2
-        ]
 
 
 # --- MBTIFeatureExtractor Sınıfı (Değişiklikler Burada) ---
@@ -45,7 +33,7 @@ class MBTIFeatureExtractor:
         self.tfidf_vectorizer = None
         self.feature_names = []
 
-    def clean_text(self, text: str, remove_mbti_types: bool = False) -> str:
+    def clean_text(self, text: str) -> str:
         """Metni temizle ve normalize et"""
         if not isinstance(text, str):
             return ""
@@ -68,30 +56,6 @@ class MBTIFeatureExtractor:
         # Çok kısa veya çok uzun kelimeleri kaldır
         text = re.sub(r"\b\w{0,3}\b", " ", text)
         text = re.sub(r"\b\w{30,}\b", " ", text)
-
-        # MBTI Kişilik Kelimelerini Kaldır
-        if remove_mbti_types:
-            pers_types = [
-                "INFP",
-                "INFJ",
-                "INTP",
-                "INTJ",
-                "ENTP",
-                "ENFP",
-                "ISTP",
-                "ISFP",
-                "ENTJ",
-                "ISTJ",
-                "ENFJ",
-                "ISFJ",
-                "ESTP",
-                "ESFP",
-                "ESFJ",
-                "ESTJ",
-            ]
-            pers_types = [p.lower() for p in pers_types]
-            p = re.compile(r"\b(" + "|".join(pers_types) + r")\b")
-            text = p.sub(" ", text)
 
         # Sadece alfanümerik karakterleri ve boşlukları koru
         text = re.sub(r"[^0-9a-z\s]", " ", text)
@@ -258,7 +222,6 @@ class MBTIFeatureExtractor:
             max_df=tfidf_params.get("max_df", 0.95),
             stop_words="english",
             lowercase=False,
-            tokenizer=Lemmatizer(),
         )
 
         tfidf_features = self.tfidf_vectorizer.fit_transform(data["cleaned_posts"])

@@ -39,7 +39,6 @@ data_processing:
   lowercase: true
   tuning_n_iter: 30
   tuning_cv_folds: 3
-  early_stopping_rounds: 50
 
 logging:
   level: "INFO"
