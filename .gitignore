@@ -221,5 +221,5 @@ pip-selfcheck.json
 
 best_model/
 data/
-
+models/
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode,venv,git

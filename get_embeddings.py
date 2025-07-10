@@ -8,6 +8,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from tqdm import tqdm
 import os
 import sys
+from nltk.stem import WordNetLemmatizer
+from nltk.corpus import stopwords
+from imblearn.over_sampling import SMOTE
+from collections import Counter
 
 # BERT için gerekli kütüphaneler
 from transformers import AutoTokenizer, AutoModel
@@ -29,6 +33,18 @@ from config import (
 tqdm.pandas()
 
 
+class Lemmatizer(object):
+    def __init__(self):
+        self.lemmatizer = WordNetLemmatizer()
+
+    def __call__(self, sentence):
+        return [
+            self.lemmatizer.lemmatize(word)
+            for word in sentence.split()
+            if len(word) > 2
+        ]
+
+
 class MBTI_TFIDF_FeatureExtractor:
     def __init__(
         self,
@@ -41,7 +57,10 @@ class MBTI_TFIDF_FeatureExtractor:
             f"TF-IDF vektörleştirici başlatılıyor (max_features={max_features}, ngram_range={ngram_range})..."
         )
         self.tfidf_vectorizer = TfidfVectorizer(
-            max_features=max_features, ngram_range=ngram_range
+            max_features=max_features,
+            ngram_range=ngram_range,
+            tokenizer=Lemmatizer(),
+            stop_words="english",
         )
         self.feature_names = []
         self.use_bert = use_bert  # Kullanım durumu
@@ -376,14 +395,41 @@ def get_embeddings_main(
     features, feature_names = extractor.extract_features(data)
     labels = data["type"].values
 
+    print(f"Original label distribution: {Counter(labels)}")
+
+    # ---- SINIF DENGESİZLİĞİNİ DÜZELTME BAŞLANGICI ----
+    # Örneğin SMOTE kullanarak aşırı örnekleme
+    # Çok boyutlu TF-IDF ve BERT embedding'leri için uygun bir yaklaşım olabilir.
+    # SMOTE'u uygulamadan önce verinizin sayısal olduğundan emin olun.
+
+    # SMOTE'u yalnızca eğitim veri setine uygulayın, test/doğrulama setine değil!
+    # Bu nedenle, burada sadece özellikleri çıkardıktan sonra genel bir uygulama gösteriliyor.
+    # Genellikle bu adım model eğitim pipeline'ı içinde yapılır.
+
+    print("Applying SMOTE for class balancing...")
+    smote = SMOTE(
+        random_state=42, k_neighbors=5
+    )  # k_neighbors, sentetik örnekler oluşturmak için kullanılacak komşu sayısını belirler.
+
+    # SMOTE, yalnızca numpy array'ler üzerinde çalışır
+    features_resampled, labels_resampled = smote.fit_resample(features, labels)
+
+    print(f"Resampled feature shape: {features_resampled.shape}")
+    print(f"Resampled label distribution: {Counter(labels_resampled)}")
+    # ---- SINIF DENGESİZLİĞİNİ DÜZELTME BİTİŞİ ----
+
     if use_bert_embeddings:
-        extractor.save_features(features, labels, feature_names, output_path_bert)
+        extractor.save_features(
+            features_resampled, labels_resampled, feature_names, output_path_bert
+        )
     else:
-        extractor.save_features(features, labels, feature_names, output_path_tfidf)
+        extractor.save_features(
+            features_resampled, labels_resampled, feature_names, output_path_tfidf
+        )
 
     print("\nİşlem tamamlandı!")
-    print(f"Feature matrix shape: {features.shape}")  # Genel feature shape
-    print(f"Unique MBTI types: {np.unique(labels)}")
+    print(f"Feature matrix shape after resampling: {features_resampled.shape}")
+    print(f"Unique MBTI types: {np.unique(labels_resampled)}")
 
 
 if __name__ == "__main__":
@@ -394,7 +440,3 @@ if __name__ == "__main__":
         EMBEDDINGS_FILE_PATH_BERT,
         USE_BERT_EMBEDDINGS,
     )
-
-    # Yalnızca TF-IDF özelliklerini çıkarmak isterseniz (USE_BERT_EMBEDDINGS = False olarak ayarlıysa bu çalışır)
-    # Veya isterseniz USE_BERT_EMBEDDINGS'i True yapıp ayrı bir çağrı da yapabilirsiniz
-    # get_embeddings_main(MBTI_DATASET_PATH, EMBEDDINGS_FILE_PATH, EMBEDDINGS_FILE_PATH_BERT, False)
