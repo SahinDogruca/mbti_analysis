@@ -32,7 +32,7 @@ SVC_MODEL_PATH = os.path.join(MODEL_DIR, "mbti_svc_multiclass_model.pkl")
 # Feature Extraction Parameters
 TFIDF_MAX_FEATURES = 5000
 TFIDF_NGRAM_RANGE = (1, 3)
-USE_BERT_EMBEDDINGS = False
+USE_BERT_EMBEDDINGS = True
 BERT_MODEL_NAME = "bert-large-uncased"
 
 # Training Parameters
@@ -40,6 +40,11 @@ TEST_SIZE = 0.2
 VAL_SIZE = 0.1
 RANDOM_STATE = 42
 USE_RANDOM_SEARCH = False
+
+# Class Imbalance Handling Parameters (New)
+# Set to 'none', 'smote', or 'class_weight'
+CLASS_IMBALANCE_STRATEGY = "smote"  # Varsayılan olarak dengeleme yapılmaz
+SMOTE_K_NEIGHBORS = 5  # SMOTE için k_neighbors değeri
 
 # Neural Network Parameters (New)
 NEURAL_NETWORK_LEARNING_RATE = 0.001

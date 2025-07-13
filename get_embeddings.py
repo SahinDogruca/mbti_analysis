@@ -10,8 +10,9 @@ import os
 import sys
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import stopwords
-from imblearn.over_sampling import SMOTE
-from collections import Counter
+
+# from imblearn.over_sampling import SMOTE # Bu satır kaldırıldı veya yorum satırı yapıldı
+# from collections import Counter # Bu satır kaldırıldı veya yorum satırı yapıldı
 
 # BERT için gerekli kütüphaneler
 from transformers import AutoTokenizer, AutoModel
@@ -28,6 +29,9 @@ from config import (
     TFIDF_NGRAM_RANGE,
     USE_BERT_EMBEDDINGS,
     BERT_MODEL_NAME,
+    # Yeni eklenen parametreler buraya eklenebilir, ancak bu dosyada kullanılmayacakları için zorunlu değil
+    # CLASS_IMBALANCE_STRATEGY,
+    # SMOTE_K_NEIGHBORS,
 )
 
 tqdm.pandas()
@@ -103,13 +107,11 @@ class MBTI_TFIDF_FeatureExtractor:
     def clean_text(self, text: str) -> str:
         if not isinstance(text, str):
             return ""
-        text = text.lower()  # Tüm metni küçük harfe çevirin
-        text = re.sub(r"http[s]?://\S+", "", text)  # URL'leri kaldırın
-        text = re.sub(r"<[^>]+>", "", text)  # HTML etiketlerini kaldırın
-        text = re.sub(
-            r"[^a-z0-9\sğüşöçı]", "", text
-        )  # Sadece küçük harf (Türkçe dahil), rakam ve boşlukları koru
-        text = re.sub(r"\s+", " ", text)  # Birden fazla boşluğu tek boşluğa indir
+        text = text.lower()
+        text = re.sub(r"http[s]?://\S+", "", text)
+        text = re.sub(r"<[^>]+>", "", text)
+        text = re.sub(r"[^a-z0-9\sğüşöçı]", "", text)
+        text = re.sub(r"\s+", " ", text)
         return text.strip()
 
     def extract_linguistic_features(self, text: str) -> Dict:
@@ -246,35 +248,25 @@ class MBTI_TFIDF_FeatureExtractor:
     def _get_bert_embedding(self, text: str) -> np.ndarray:
         """Metinden BERT embedding'i çıkarır."""
         if not self.use_bert or not self.bert_model or not self.bert_tokenizer:
-            return np.array([])  # BERT kullanılmıyorsa boş dizi döndür
+            return np.array([])
 
         try:
             inputs = self.bert_tokenizer(
                 text,
                 return_tensors="pt",
-                padding="max_length",  # Doldurma
-                truncation=True,  # Kesme
-                max_length=512,  # Maksimum token uzunluğu
+                padding="max_length",
+                truncation=True,
+                max_length=512,
             ).to(self.device)
 
             with torch.no_grad():
                 outputs = self.bert_model(**inputs)
 
-            # Son gizli durum çıktısını al
-            # Burada CLS token embedding'i (ilk token) veya tüm tokenlerin ortalaması kullanılabilir
-            # Genellikle CLS tokenı cümle seviyesi temsili için kullanılır
-            sentence_embedding = (
-                outputs.last_hidden_state[:, 0, :].cpu().numpy()
-            )  # CLS token embedding'i
+            sentence_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
-            # Veya tüm token embedding'lerinin ortalaması
-            # sentence_embedding = torch.mean(outputs.last_hidden_state, dim=1).cpu().numpy()
-
-            return sentence_embedding.flatten()  # 2D'den 1D'ye düzleştir
+            return sentence_embedding.flatten()
         except Exception as e:
             print(f"BERT embedding çıkarılırken hata oluştu: {e}")
-            # Hata durumunda sıfırlardan oluşan bir embedding döndür (boyut modelin gizli boyutuna bağlı)
-            # Örneğin, dbmdz/bert-base-turkish-cased için gizli boyut 768'dir.
             return np.zeros(self.bert_model.config.hidden_size)
 
     def extract_features(self, data: pd.DataFrame) -> Tuple[np.ndarray, List[str]]:
@@ -296,9 +288,8 @@ class MBTI_TFIDF_FeatureExtractor:
         linguistic_df = pd.DataFrame(linguistic_features_list)
         linguistic_feature_names = [f"ling_{col}" for col in linguistic_df.columns]
         linguistic_array = linguistic_df.values
-        linguistic_array = np.nan_to_num(linguistic_array)  # NaN değerleri sıfıra çevir
+        linguistic_array = np.nan_to_num(linguistic_array)
 
-        # Özellikleri birleştirme
         feature_matrix_parts = [tfidf_features, linguistic_array]
         all_feature_names = tfidf_feature_names + linguistic_feature_names
 
@@ -307,13 +298,11 @@ class MBTI_TFIDF_FeatureExtractor:
             bert_embeddings_list = (
                 data["cleaned_posts"].progress_apply(self._get_bert_embedding).tolist()
             )
-            # Her bir embedding'in boyutunun aynı olduğundan emin ol (modelin gizli boyutu)
-            # Eğer boş liste dönerse, sıfırlardan oluşan bir array ile doldur
             if not bert_embeddings_list or len(bert_embeddings_list[0]) == 0:
                 print(
                     "Uyarı: BERT embedding'leri boş veya çıkarılamadı. BERT özellikleri dahil edilmeyecek."
                 )
-                self.use_bert = False  # Hata durumunda BERT kullanımını kapat
+                self.use_bert = False
             else:
                 bert_embeddings_array = np.array(bert_embeddings_list)
                 feature_matrix_parts.append(bert_embeddings_array)
@@ -351,9 +340,6 @@ class MBTI_TFIDF_FeatureExtractor:
         feature_df["mbti_type"] = labels
         feature_df.to_csv(f"{filepath}.csv", index=False)
 
-        # TF-IDF vektörleştiriciyi sadece TF-IDF kullanılıyorsa kaydedin
-        # veya her zaman kaydedip farklı bir isimle ayırın.
-        # Bu durumda, BERT'siz versiyon için de TF-IDF vektörleştiriciyi ayrı kaydediyoruz.
         with open(f"{TFIDF_VECTORIZER_PATH}", "wb") as f:
             pickle.dump(self.tfidf_vectorizer, f)
 
@@ -395,45 +381,20 @@ def get_embeddings_main(
     features, feature_names = extractor.extract_features(data)
     labels = data["type"].values
 
-    print(f"Original label distribution: {Counter(labels)}")
-
-    # ---- SINIF DENGESİZLİĞİNİ DÜZELTME BAŞLANGICI ----
-    # Örneğin SMOTE kullanarak aşırı örnekleme
-    # Çok boyutlu TF-IDF ve BERT embedding'leri için uygun bir yaklaşım olabilir.
-    # SMOTE'u uygulamadan önce verinizin sayısal olduğundan emin olun.
-
-    # SMOTE'u yalnızca eğitim veri setine uygulayın, test/doğrulama setine değil!
-    # Bu nedenle, burada sadece özellikleri çıkardıktan sonra genel bir uygulama gösteriliyor.
-    # Genellikle bu adım model eğitim pipeline'ı içinde yapılır.
-
-    print("Applying SMOTE for class balancing...")
-    smote = SMOTE(
-        random_state=42, k_neighbors=5
-    )  # k_neighbors, sentetik örnekler oluşturmak için kullanılacak komşu sayısını belirler.
-
-    # SMOTE, yalnızca numpy array'ler üzerinde çalışır
-    features_resampled, labels_resampled = smote.fit_resample(features, labels)
-
-    print(f"Resampled feature shape: {features_resampled.shape}")
-    print(f"Resampled label distribution: {Counter(labels_resampled)}")
-    # ---- SINIF DENGESİZLİĞİNİ DÜZELTME BİTİŞİ ----
+    # Bu aşamada SMOTE veya sınıf ağırlıklandırma yapılmayacak.
+    # Bu işlemler train_test_split sonrası xgboost_train.py içinde yapılacak.
 
     if use_bert_embeddings:
-        extractor.save_features(
-            features_resampled, labels_resampled, feature_names, output_path_bert
-        )
+        extractor.save_features(features, labels, feature_names, output_path_bert)
     else:
-        extractor.save_features(
-            features_resampled, labels_resampled, feature_names, output_path_tfidf
-        )
+        extractor.save_features(features, labels, feature_names, output_path_tfidf)
 
     print("\nİşlem tamamlandı!")
-    print(f"Feature matrix shape after resampling: {features_resampled.shape}")
-    print(f"Unique MBTI types: {np.unique(labels_resampled)}")
+    print(f"Feature matrix shape: {features.shape}")
+    print(f"Unique MBTI types: {np.unique(labels)}")
 
 
 if __name__ == "__main__":
-    # TF-IDF + BERT özelliklerini çıkarmak için
     get_embeddings_main(
         MBTI_DATASET_PATH,
         EMBEDDINGS_FILE_PATH,
